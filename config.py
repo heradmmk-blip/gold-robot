@@ -1,1 +1,32 @@
+import os
 
+TELEGRAM_BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+TELEGRAM_CHAT_ID   = os.environ.get("CHAT_ID", "YOUR_CHAT_ID_HERE")
+
+BRS_API_KEY = os.environ.get("BRS_API_KEY", "")
+
+FETCH_INTERVAL_MINUTES = 15
+ALERT_COOLDOWN_MINUTES = 60
+
+EMA_FAST = 20
+EMA_SLOW = 50
+RSI_PERIOD = 14
+RSI_OVERBOUGHT = 70
+RSI_OVERSOLD = 30
+MACD_FAST = 12
+MACD_SLOW = 26
+MACD_SIGNAL = 9
+ATR_PERIOD = 14
+
+SWING_LENGTH = 5
+
+WEIGHTS = {
+    "technical":    0.30,
+    "fundamental":  0.40,
+    "smc":          0.30,
+}
+
+BULLISH_THRESHOLD = 0.65
+BEARISH_THRESHOLD = 0.35
+
+DB_PATH = "gold_data.db"
