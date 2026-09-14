@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+from pattern_engine import run_pattern_analysis
 from datetime import datetime, timedelta
 from aiohttp import web
 from telegram import Update
@@ -321,7 +322,8 @@ async def analyze_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tech = run_technical_analysis(df)
         fund = compute_fundamental_score(data, df)
         smc_r = compute_smc_score(df)
-        signal = signal_engine.combine(tech, fund, smc_r)
+        pattern_r = run_pattern_analysis(df, price)
+   signal = signal_engine.combine(tech, fund, smc_r, pattern_r)
 
         last_analysis["signal"] = signal
         last_analysis["price"] = price
@@ -428,7 +430,8 @@ async def analysis_loop():
                 tech = run_technical_analysis(df)
                 fund = compute_fundamental_score(data, df)
                 smc_r = compute_smc_score(df)
-                signal = signal_engine.combine(tech, fund, smc_r)
+                pattern_r = run_pattern_analysis(df, price)
+signal = signal_engine.combine(tech, fund, smc_r, pattern_r)
 
                 last_analysis["signal"] = signal
                 last_analysis["price"] = price
