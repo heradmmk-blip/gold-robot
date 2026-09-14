@@ -1,5 +1,5 @@
 aiogram
-aiohttprequests>=2.31.0
+aiohttpaiogram
 pandas>=2.1.0
 numpy>=1.26.0
 tradingview-ta>=3.3.0
