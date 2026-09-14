@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from aiohttp import web
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, FETCH_INTERVAL_MINUTES
+from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHsignal FETCH_INTERVAL_MINUTES
 from data_fetcher import init_db, fetch_all_data, save_price_data, get_historical_data
 from technical_engine import run_technical_analysis
 from fundamental_engine import compute_fundamental_score
@@ -323,7 +323,7 @@ async def analyze_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         fund = compute_fundamental_score(data, df)
         smc_r = compute_smc_score(df)
         pattern_r = run_pattern_analysis(df, price)
-   signal = signal_engine.combine(tech, fund, smc_r, pattern_r)
+        signal = signal_engine.combine(tech, fund, smc_r, pattern_r)
 
         last_analysis["signal"] = signal
         last_analysis["price"] = price
@@ -431,7 +431,7 @@ async def analysis_loop():
                 fund = compute_fundamental_score(data, df)
                 smc_r = compute_smc_score(df)
                 pattern_r = run_pattern_analysis(df, price)
-signal = signal_engine.combine(tech, fund, smc_r, pattern_r)
+                signal = signal_engine.combine(tech, fund, smc_r, pattern_r)
 
                 last_analysis["signal"] = signal
                 last_analysis["price"] = price
