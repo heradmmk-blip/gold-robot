@@ -1,3 +1,5 @@
+from chart_engine import generate_price_chart
+from telegram_notifier import send_telegram_photo_async
 import os
 import asyncio
 import logging
@@ -351,7 +353,31 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 
+async def chart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("📊 در حال ساخت نمودار...")
 
+    try:
+        df = get_historical_data(days=3)
+
+        if df.empty or len(df) < 2:
+            await update.message.reply_text(
+                "📭 هنوز داده کافی برای رسم نمودار نداریم.\n"
+                "چند ساعت دیگه دوباره امتحان کن."
+            )
+            return
+
+        chart_buffer = generate_price_chart(df, "Gold 18K - Last 3 Days")
+
+        if chart_buffer is None:
+            await update.message.reply_text("❌ ساخت نمودار ناموفق بود.")
+            return
+
+        caption = f"📊 نمودار طلای ۱۸ عیار\n🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        await send_telegram_photo_async(chart_buffer, caption)
+
+    except Exception as e:
+        logger.error(f"chart_cmd error: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ خطا: {str(e)[:200]}")
 async def analysis_loop():
     logger.info("🔄 شروع حلقه تحلیل...")
     await asyncio.sleep(30)
