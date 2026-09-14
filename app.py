@@ -450,7 +450,7 @@ async def webhook_handler(request):
     return web.Response(text="OK")
 
 
-async def main(application.add_handler(CommandHandler("status", status_cmd))application.add_handler(CommandHandler("chart", chart_cmd))):
+ async def main():
     init_db()
 
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
@@ -462,6 +462,7 @@ async def main(application.add_handler(CommandHandler("status", status_cmd))appl
     application.add_handler(CommandHandler("signal", signal_cmd))
     application.add_handler(CommandHandler("report", report_cmd))
     application.add_handler(CommandHandler("status", status_cmd))
+    application.add_handler(CommandHandler("chart", chart_cmd))
 
     await application.initialize()
     await application.start()
