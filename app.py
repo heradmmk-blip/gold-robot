@@ -449,7 +449,7 @@ async def webhook_handler(request):
     return web.Response(text="OK")
 
 
-async def main():
+async def main(application.add_handler(CommandHandler("status", status_cmd))application.add_handler(CommandHandler("chart", chart_cmd))):
     init_db()
 
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
