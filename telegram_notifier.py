@@ -17,3 +17,17 @@ async def send_telegram_message_async(message):
     except Exception as e:
         logger.error(f"❌ ارسال failed: {e}")
         return False
+
+
+async def send_telegram_photo_async(photo_buffer, caption=""):
+    """ارسال عکس به تلگرام."""
+    try:
+        bot = Bot(token=TELEGRAM_BOT_TOKEN)
+        await bot.send_photo(chat_id=TELEGRAM_CHAT_ID,
+                             photo=photo_buffer,
+                             caption=caption)
+        logger.info("✅ عکس ارسال شد")
+        return True
+    except Exception as e:
+        logger.error(f"❌ ارسال عکس failed: {e}")
+        return False
