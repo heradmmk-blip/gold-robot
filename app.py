@@ -1,16 +1,16 @@
 import os
 import asyncio
 import logging
-from pattern_engine import run_pattern_analysis
 from datetime import datetime, timedelta
 from aiohttp import web
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHsignal FETCH_INTERVAL_MINUTES
+from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, FETCH_INTERVAL_MINUTES
 from data_fetcher import init_db, fetch_all_data, save_price_data, get_historical_data
 from technical_engine import run_technical_analysis
 from fundamental_engine import compute_fundamental_score
 from smc_engine import compute_smc_score
+from pattern_engine import run_pattern_analysis
 from signal_engine import SignalEngine
 from telegram_notifier import send_telegram_message_async
 
@@ -25,9 +25,6 @@ RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "")
 
 signal_engine = SignalEngine()
 
-# ══════════════════════════════════════════════
-# کش و وضعیت
-# ══════════════════════════════════════════════
 last_analysis = {
     "signal": None,
     "price": None,
@@ -35,16 +32,12 @@ last_analysis = {
     "data": None,
 }
 
-# برای هشدار نوسان شدید
-price_history = []  # لیست از (timestamp, price)
-SHARP_MOVE_THRESHOLD = 1.0   # درصد
-SHARP_MOVE_WINDOW_MIN = 15   # دقیقه
-
-# برای گزارش روزانه
-DAILY_REPORT_HOUR = 9        # ساعت ۹ صبح
+price_history = []
+SHARP_MOVE_THRESHOLD = 1.0
+SHARP_MOVE_WINDOW_MIN = 15
+DAILY_REPORT_HOUR = 9
 last_daily_report_date = None
 
-# وضعیت روز (برای گزارش روزانه)
 daily_stats = {
     "open": None,
     "high": None,
@@ -58,7 +51,6 @@ daily_stats = {
 
 
 def reset_daily_stats(price):
-    """شروع آمار روز جدید."""
     daily_stats["open"] = price
     daily_stats["high"] = price
     daily_stats["low"] = price
@@ -70,7 +62,6 @@ def reset_daily_stats(price):
 
 
 def update_daily_stats(price):
-    """به‌روزرسانی آمار روز."""
     if daily_stats["open"] is None:
         reset_daily_stats(price)
     else:
@@ -81,26 +72,15 @@ def update_daily_stats(price):
         daily_stats["close"] = price
 
 
-# ══════════════════════════════════════════════
-# هشدار نوسان شدید
-# ══════════════════════════════════════════════
 def check_sharp_movement(current_price):
-    """
-    چک می‌کنه اگه قیمت در بازه زمانی کوتاه تغییر شدیدی داشته باشه.
-    برمی‌گردونه: (متن هشدار یا None)
-    """
     global price_history
 
     now = datetime.now()
-
-    # اضافه کردن قیمت جدید
     price_history.append((now, current_price))
 
-    # پاک کردن رکوردهای قدیمی‌تر از پنجره
     cutoff = now - timedelta(minutes=SHARP_MOVE_WINDOW_MIN)
     price_history = [(t, p) for t, p in price_history if t >= cutoff]
 
-    # نیاز به حداقل ۲ نقطه
     if len(price_history) < 2:
         return None
 
@@ -108,8 +88,13 @@ def check_sharp_movement(current_price):
     change_pct = (current_price - oldest_price) / oldest_price * 100
 
     if abs(change_pct) >= SHARP_MOVE_THRESHOLD:
-        emoji = "🚀" if change_pct > 0 else "💥"
-        direction = "صعودی" if change_pct > 0 else "نزولی"
+        if change_pct > 0:
+            emoji = "🚀"
+            direction = "صعودی"
+        else:
+            emoji = "💥"
+            direction = "نزولی"
+
         return (
             f"{emoji} **هشدار نوسان شدید!**\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -123,11 +108,7 @@ def check_sharp_movement(current_price):
     return None
 
 
-# ══════════════════════════════════════════════
-# گزارش روزانه
-# ══════════════════════════════════════════════
 def build_daily_report():
-    """ساخت متن گزارش روزانه."""
     if daily_stats["open"] is None:
         return None
 
@@ -140,11 +121,17 @@ def build_daily_report():
         return None
 
     change = (c - o) / o * 100
-    emoji = "🟢" if change > 0 else "🔴" if change < 0 else "⚪️"
+    if change > 0:
+        emoji = "🟢"
+    elif change < 0:
+        emoji = "🔴"
+    else:
+        emoji = "⚪️"
+
     date_str = daily_stats["start_date"].strftime("%Y-%m-%d") if daily_stats["start_date"] else "—"
 
     lines = [
-        f"📊 **گزارش روزانه طلا**",
+        "📊 **گزارش روزانه طلا**",
         f"📅 {date_str}",
         "━━━━━━━━━━━━━━━━━━━━",
         f"🔓 باز:    **{o:,.0f}**",
@@ -159,7 +146,6 @@ def build_daily_report():
         f"  🔴 نزولی: {daily_stats['bearish_count']}",
     ]
 
-    # دامنه نوسان
     if o > 0:
         volatility = (h - l) / o * 100
         lines.append(f"\n📉 دامنه نوسان: **{volatility:.2f}%**")
@@ -168,20 +154,16 @@ def build_daily_report():
 
 
 async def check_daily_report():
-    """اگه ساعت ۹ صبح بود و امروز گزارش نداده، بفرست."""
     global last_daily_report_date
 
     now = datetime.now()
 
-    # ساعت ۹ صبح به بعد
     if now.hour != DAILY_REPORT_HOUR:
         return
 
-    # امروز قبلاً گزارش داده شده؟
     if last_daily_report_date == now.date():
         return
 
-    # داده کافی هست؟
     if daily_stats["open"] is None:
         return
 
@@ -191,15 +173,7 @@ async def check_daily_report():
         logger.info("📊 گزارش روزانه ارسال شد")
         last_daily_report_date = now.date()
 
-        # ریست آمار برای روز جدید
-        # (تا پایان امروز جمع می‌کنیم، فردا صبح گزارش می‌ده)
-        # این خط رو کامنت می‌کنیم که آمار امروز رو از دست نده
-        # reset_daily_stats(daily_stats["close"])
 
-
-# ══════════════════════════════════════════════
-# دستور /start
-# ══════════════════════════════════════════════
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "🟢 **ربات تحلیل طلا فعال است!**\n"
@@ -208,32 +182,24 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "در صورت مشاهده سیگنال قوی، برات پیام می‌فرستم.\n\n"
         "📊 **قابلیت‌های جدید:**\n"
         "• گزارش روزانه خودکار (ساعت ۹ صبح)\n"
-        "• هشدار نوسان شدید (>۱٪ در ۱۵ دقیقه)\n\n"
+        "• هشدار نوسان شدید (>۱٪ در ۱۵ دقیقه)\n"
+        "• الگوهای کندلی + سطوح حمایت/مقاومت\n\n"
         "📌 برای دیدن راهنما، دستور /help رو بزن."
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
-# ══════════════════════════════════════════════
-# دستور /help
-# ══════════════════════════════════════════════
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "📚 **راهنمای ربات تحلیل طلا**\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
         "**دستورات موجود:**\n\n"
-        "💹 /price\n"
-        "   قیمت لحظه‌ای طلا، انس، دلار و DXY\n\n"
-        "📊 /analyze\n"
-        "   تحلیل کامل و فوری (تکنیکال + فاندامنتال + SMC)\n\n"
-        "🎯 /signal\n"
-        "   آخرین سیگنال تولیدشده با جزئیات\n\n"
-        "📈 /report\n"
-        "   گزارش امروز (باز، بسته، بیشترین، کمترین)\n\n"
-        "⚙️ /status\n"
-        "   وضعیت ربات و زمان آخرین به‌روزرسانی\n\n"
-        "ℹ️ /help\n"
-        "   همین راهنما\n\n"
+        "💹 /price - قیمت لحظه‌ای بازار\n\n"
+        "📊 /analyze - تحلیل کامل و فوری\n\n"
+        "🎯 /signal - آخرین سیگنال\n\n"
+        "📈 /report - گزارش امروز\n\n"
+        "⚙️ /status - وضعیت ربات\n\n"
+        "ℹ️ /help - همین راهنما\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "🔔 **هشدارهای خودکار:**\n"
         "• سیگنال قوی (اطمینان >۶۰٪)\n"
@@ -246,9 +212,6 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
-# ══════════════════════════════════════════════
-# دستور /price
-# ══════════════════════════════════════════════
 async def price_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ در حال دریافت قیمت‌ها...")
 
@@ -296,15 +259,9 @@ async def price_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logger.error(f"price_cmd error: {e}")
-        await update.message.reply_text(
-            f"❌ خطا در دریافت قیمت:\n`{str(e)[:200]}`",
-            parse_mode="Markdown"
-        )
+        await update.message.reply_text(f"❌ خطا: {str(e)[:200]}")
 
 
-# ══════════════════════════════════════════════
-# دستور /analyze
-# ══════════════════════════════════════════════
 async def analyze_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔍 در حال تحلیل کامل بازار... لطفاً صبر کن.")
 
@@ -335,15 +292,9 @@ async def analyze_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logger.error(f"analyze_cmd error: {e}", exc_info=True)
-        await update.message.reply_text(
-            f"❌ خطا در تحلیل:\n`{str(e)[:200]}`",
-            parse_mode="Markdown"
-        )
+        await update.message.reply_text(f"❌ خطا در تحلیل: {str(e)[:200]}")
 
 
-# ══════════════════════════════════════════════
-# دستور /signal
-# ══════════════════════════════════════════════
 async def signal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not last_analysis["signal"]:
         text = (
@@ -361,9 +312,6 @@ async def signal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 
-# ══════════════════════════════════════════════
-# دستور /report
-# ══════════════════════════════════════════════
 async def report_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     report = build_daily_report()
     if not report:
@@ -375,9 +323,6 @@ async def report_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(report, parse_mode="Markdown")
 
 
-# ══════════════════════════════════════════════
-# دستور /status
-# ══════════════════════════════════════════════
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if last_analysis["timestamp"]:
         last_time = last_analysis["timestamp"][:19].replace("T", " ")
@@ -394,7 +339,7 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "⚙️ **وضعیت ربات**\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        f"🟢 وضعیت: فعال\n"
+        "🟢 وضعیت: فعال\n"
         f"⏰ فاصله تحلیل: هر {FETCH_INTERVAL_MINUTES} دقیقه\n"
         f"🕐 آخرین تحلیل: {last_time}\n"
         f"🎯 آخرین سیگنال: {signal_line}\n"
@@ -407,9 +352,6 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
-# ══════════════════════════════════════════════
-# حلقه تحلیل خودکار
-# ══════════════════════════════════════════════
 async def analysis_loop():
     logger.info("🔄 شروع حلقه تحلیل...")
     await asyncio.sleep(30)
@@ -438,22 +380,18 @@ async def analysis_loop():
                 last_analysis["timestamp"] = datetime.now().isoformat()
                 last_analysis["data"] = data
 
-                logger.info(f"📊 جهت: {signal['direction']} | "
-                            f"اطمینان: {signal['confidence']}%")
+                logger.info(f"📊 جهت: {signal['direction']} | اطمینان: {signal['confidence']}%")
 
-                # ─── هشدار نوسان شدید ───
                 sharp_msg = check_sharp_movement(price)
                 if sharp_msg:
                     await send_telegram_message_async(sharp_msg)
                     logger.info("⚠️ هشدار نوسان شدید ارسال شد")
 
-                # ─── سیگنال معمولی ───
                 if signal_engine.should_alert(signal):
                     msg = signal_engine.format_message(signal, price)
                     await send_telegram_message_async(msg)
                     logger.info("✅ هشدار سیگنال ارسال شد")
 
-                    # به‌روزرسانی آمار روز
                     daily_stats["signals_count"] += 1
                     if signal["direction"] == "صعودی":
                         daily_stats["bullish_count"] += 1
@@ -463,7 +401,6 @@ async def analysis_loop():
             else:
                 logger.warning("⚠️ قیمت دریافت نشد")
 
-            # ─── گزارش روزانه ───
             await check_daily_report()
 
         except Exception as e:
@@ -472,9 +409,6 @@ async def analysis_loop():
         await asyncio.sleep(FETCH_INTERVAL_MINUTES * 60)
 
 
-# ══════════════════════════════════════════════
-# وب‌سرور (برای Render)
-# ══════════════════════════════════════════════
 async def health(request):
     return web.Response(text="Bot is running")
 
