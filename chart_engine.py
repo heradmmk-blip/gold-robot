@@ -1,19 +1,20 @@
 import io
 import logging
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from matplotlib import rcParams
 
 logger = logging.getLogger(__name__)
 
 
 def generate_price_chart(df, title="Gold 18K Price"):
-    """
-    ساخت نمودار قیمت طلا.
-    خروجی: bytes عکس PNG
-    """
+    """ساخت نمودار قیمت طلا (lazy import matplotlib)."""
     if df.empty or len(df) < 2:
+        return None
+
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception as e:
+        logger.error(f"Matplotlib import failed: {e}")
         return None
 
     try:
@@ -26,16 +27,13 @@ def generate_price_chart(df, title="Gold 18K Price"):
         x = range(len(df))
         prices = df["close"].values
 
-        # خط قیمت
         ax1.plot(x, prices, color="#2E86DE", linewidth=2, label="Close")
 
-        # EMA 20
         if len(df) >= 20:
             ema20 = df["close"].ewm(span=20, adjust=False).mean().values
             ax1.plot(x, ema20, color="#F39C12", linewidth=1,
                      label="EMA 20", alpha=0.8)
 
-        # EMA 50
         if len(df) >= 50:
             ema50 = df["close"].ewm(span=50, adjust=False).mean().values
             ax1.plot(x, ema50, color="#E74C3C", linewidth=1,
@@ -45,11 +43,8 @@ def generate_price_chart(df, title="Gold 18K Price"):
         ax1.set_ylabel("Price (Toman)")
         ax1.legend(loc="upper left", fontsize=9)
         ax1.grid(True, alpha=0.3)
-
-        # فرمت اعداد
         ax1.ticklabel_format(style="plain", axis="y")
 
-        # RSI
         if len(df) >= 15:
             delta = df["close"].diff()
             gain = delta.where(delta > 0, 0.0)
@@ -66,7 +61,6 @@ def generate_price_chart(df, title="Gold 18K Price"):
             ax2.set_ylim(0, 100)
             ax2.grid(True, alpha=0.3)
 
-        # محور X: تاریخ‌ها
         if hasattr(df.index, "strftime"):
             step = max(1, len(df) // 6)
             ticks = list(range(0, len(df), step))
@@ -76,7 +70,6 @@ def generate_price_chart(df, title="Gold 18K Price"):
 
         plt.tight_layout()
 
-        # ذخیره در حافظه
         buf = io.BytesIO()
         plt.savefig(buf, format="png", dpi=100)
         buf.seek(0)
