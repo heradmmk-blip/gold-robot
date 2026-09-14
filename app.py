@@ -200,6 +200,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📊 /analyze - تحلیل کامل و فوری\n\n"
         "🎯 /signal - آخرین سیگنال\n\n"
         "📈 /report - گزارش امروز\n\n"
+        "📉 /chart - نمودار قیمت ۳ روز اخیر\n\n"
         "⚙️ /status - وضعیت ربات\n\n"
         "ℹ️ /help - همین راهنما\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
