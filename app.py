@@ -1,120 +1,327 @@
 import os
 import asyncio
 import logging
+from datetime import datetime
 from aiohttp import web
-from aiogram import Bot, Dispatcher, types
-from aiogram.filters import CommandStart
-from aiogram.client.default import DefaultBotProperties
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
+from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, FETCH_INTERVAL_MINUTES
+from data_fetcher import init_db, fetch_all_data, save_price_data, get_historical_data
+from technical_engine import run_technical_analysis
+from fundamental_engine import compute_fundamental_score
+from smc_engine import compute_smc_score
+from signal_engine import SignalEngine
+from telegram_notifier import send_telegram_message_async
 
-# --- ۱. تنظیمات لاگ‌ها (برای دیدن بهتر خطاها در Render) ---
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("app")
 
-# --- ۲. خواندن متغیرهای محیطی از Render ---
-# توکن ربات (در تنظیمات Render باید تعریف شود)
-BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+PORT = int(os.environ.get("PORT", 8443))
+RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "")
 
-# آدرس عمومی سرویس در Render (Render به صورت خودکار این را به برنامه می‌دهد)
-RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")
+signal_engine = SignalEngine()
 
-# پورت (Render به صورت خودکار اختصاص می‌دهد، در غیر این صورت ۱۰۰۰۰)
-PORT = int(os.environ.get("PORT", 10000))
+# کش برای آخرین تحلیل
+last_analysis = {
+    "signal": None,
+    "price": None,
+    "timestamp": None,
+    "data": None,
+}
 
-# مسیر دریافت آپدیت‌ها
-WEBHOOK_PATH = "/webhook"
-# آدرس کامل وب‌هوک
-WEBHOOK_URL = f"{RENDER_EXTERNAL_URL}{WEBHOOK_PATH}" if RENDER_EXTERNAL_URL else None
 
-if not BOT_TOKEN:
-    raise ValueError("❌ خطای بحرانی: متغیر محیطی TELEGRAM_TOKEN در Render تنظیم نشده است!")
+# ══════════════════════════════════════════════
+# دستور /start
+# ══════════════════════════════════════════════
+async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "🟢 **ربات تحلیل طلا فعال است!**\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "من هر ۱۵ دقیقه بازار طلا رو تحلیل می‌کنم و "
+        "در صورت مشاهده سیگنال قوی، برات پیام می‌فرستم.\n\n"
+        "📌 برای دیدن راهنما، دستور /help رو بزن."
+    )
+    await update.message.reply_text(text, parse_mode="Markdown")
 
-# --- ۳. مقداردهی اولیه ربات و دیسپچر ---
-bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
-dp = Dispatcher()
 
-# --- ۴. هندلرهای ربات (دستورات) ---
-@dp.message(CommandStart())
-async def cmd_start(message: types.Message):
-    """پاسخ به دستور /start"""
-    await message.answer("سلام! ربات با موفقیت روی Render راه‌اندازی شد. 🚀")
+# ══════════════════════════════════════════════
+# دستور /help
+# ══════════════════════════════════════════════
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "📚 **راهنمای ربات تحلیل طلا**\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "**دستورات موجود:**\n\n"
+        "💹 /price\n"
+        "   قیمت لحظه‌ای طلا، انس، دلار و DXY\n\n"
+        "📊 /analyze\n"
+        "   تحلیل کامل و فوری (تکنیکال + فاندامنتال + SMC)\n\n"
+        "🎯 /signal\n"
+        "   آخرین سیگنال تولیدشده با جزئیات\n\n"
+        "⚙️ /status\n"
+        "   وضعیت ربات و زمان آخرین به‌روزرسانی\n\n"
+        "ℹ️ /help\n"
+        "   همین راهنما\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "⏰ **به‌روزرسانی خودکار:** هر ۱۵ دقیقه\n"
+        "🎯 **آستانه هشدار:** اطمینان بالای ۶۰٪\n"
+        "🔇 **ضد اسپم:** حداقل ۱ ساعت بین هشدارهای مشابه\n\n"
+        "⚠️ این ربات کمک‌تحلیلگر است، نه تضمین سود."
+    )
+    await update.message.reply_text(text, parse_mode="Markdown")
 
-# --- ۵. تسک پس‌زمینه (حلقه تحلیل شما) ---
+
+# ══════════════════════════════════════════════
+# دستور /price
+# ══════════════════════════════════════════════
+async def price_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("⏳ در حال دریافت قیمت‌ها...")
+
+    try:
+        data = fetch_all_data()
+
+        gold = data.get("gold_18k") or {}
+        ounce = data.get("gold_ounce") or {}
+        usd = data.get("usd") or {}
+        dxy = data.get("dxy") or {}
+
+        lines = [
+            "💹 **قیمت لحظه‌ای بازار**",
+            "━━━━━━━━━━━━━━━━━━━━",
+        ]
+
+        if gold.get("price"):
+            lines.append(f"🥇 طلای ۱۸ عیار: **{gold['price']:,.0f}** تومان")
+        if ounce.get("price"):
+            lines.append(f"🌍 انس جهانی: **${ounce['price']:,.2f}**")
+        if usd.get("price"):
+            lines.append(f"💵 دلار آزاد: **{usd['price']:,.0f}** تومان")
+        if dxy.get("price"):
+            lines.append(f"📉 شاخص دلار: **{dxy['price']:.2f}**")
+
+        lines.append("━━━━━━━━━━━━━━━━━━━━")
+        lines.append(f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+        # محاسبه حباب اگه داده کامل بود
+        if gold.get("price") and ounce.get("price") and usd.get("price"):
+            try:
+                intrinsic = (ounce["price"] * usd["price"]) / 31.1035 * 0.75
+                bubble = (gold["price"] / intrinsic - 1) * 100
+                if bubble > 15:
+                    emoji = "🔴"
+                elif bubble < -5:
+                    emoji = "🟢"
+                else:
+                    emoji = "🟡"
+                lines.append(f"{emoji} حباب طلا: **{bubble:+.2f}%**")
+            except Exception:
+                pass
+
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+    except Exception as e:
+        logger.error(f"price_cmd error: {e}")
+        await update.message.reply_text(
+            f"❌ خطا در دریافت قیمت:\n`{str(e)[:200]}`",
+            parse_mode="Markdown"
+        )
+
+
+# ══════════════════════════════════════════════
+# دستور /analyze
+# ══════════════════════════════════════════════
+async def analyze_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔍 در حال تحلیل کامل بازار... لطفاً صبر کن.")
+
+    try:
+        data = fetch_all_data()
+
+        if not data.get("gold_18k"):
+            await update.message.reply_text("❌ قیمت طلا دریافت نشد. بعداً تلاش کن.")
+            return
+
+        price = data["gold_18k"]["price"]
+
+        # ذخیره در دیتابیس
+        save_price_data(data)
+
+        # دریافت داده تاریخی
+        df = get_historical_data(days=90)
+
+        # اجرای سه موتور
+        tech = run_technical_analysis(df)
+        fund = compute_fundamental_score(data, df)
+        smc_r = compute_smc_score(df)
+
+        # ترکیب
+        signal = signal_engine.combine(tech, fund, smc_r)
+
+        # ذخیره در کش
+        last_analysis["signal"] = signal
+        last_analysis["price"] = price
+        last_analysis["timestamp"] = datetime.now().isoformat()
+        last_analysis["data"] = data
+
+        # ساخت پیام
+        msg = signal_engine.format_message(signal, price)
+        await update.message.reply_text(msg, parse_mode="Markdown")
+
+    except Exception as e:
+        logger.error(f"analyze_cmd error: {e}", exc_info=True)
+        await update.message.reply_text(
+            f"❌ خطا در تحلیل:\n`{str(e)[:200]}`",
+            parse_mode="Markdown"
+        )
+
+
+# ══════════════════════════════════════════════
+# دستور /signal
+# ══════════════════════════════════════════════
+async def signal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not last_analysis["signal"]:
+        text = (
+            "📭 **هنوز سیگنالی تولید نشده**\n\n"
+            "اولین تحلیل خودکار تا ۱۵ دقیقه دیگه انجام می‌شه.\n"
+            "یا با دستور /analyze همین الان تحلیل بگیر."
+        )
+        await update.message.reply_text(text, parse_mode="Markdown")
+        return
+
+    msg = signal_engine.format_message(
+        last_analysis["signal"],
+        last_analysis["price"]
+    )
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+# ══════════════════════════════════════════════
+# دستور /status
+# ══════════════════════════════════════════════
+async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if last_analysis["timestamp"]:
+        last_time = last_analysis["timestamp"][:19].replace("T", " ")
+    else:
+        last_time = "هنوز اجرا نشده"
+
+    if last_analysis["signal"]:
+        direction = last_analysis["signal"]["direction"]
+        confidence = last_analysis["signal"]["confidence"]
+        signal_line = f"{direction} ({confidence}%)"
+    else:
+        signal_line = "—"
+
+    text = (
+        "⚙️ **وضعیت ربات**\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"🟢 وضعیت: فعال\n"
+        f"⏰ فاصله تحلیل: هر {FETCH_INTERVAL_MINUTES} دقیقه\n"
+        f"🕐 آخرین تحلیل: {last_time}\n"
+        f"🎯 آخرین سیگنال: {signal_line}\n"
+        f"🔗 سرویس: فعال\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "همه چیز خوبه! ✅"
+    )
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
+# ══════════════════════════════════════════════
+# حلقه تحلیل خودکار
+# ══════════════════════════════════════════════
 async def analysis_loop():
-    """این تابع در پس‌زمینه اجرا می‌شود و ربات را متوقف نمی‌کند"""
-    logger.info("🔄 تسک پس‌زمینه تحلیل شروع به کار کرد.")
+    logger.info("🔄 شروع حلقه تحلیل...")
+    await asyncio.sleep(30)
     while True:
         try:
-            # ⬇️ کدهای تحلیل خود را اینجا بنویسید ⬇️
-            # مثلاً: await check_markets()
-            logger.info("در حال انجام تحلیل دوره‌ای...")
-            
-            # هر ۶۰ ثانیه یکبار اجرا شود (زمان را می‌توانید تغییر دهید)
-            await asyncio.sleep(60) 
-        except asyncio.CancelledError:
-            logger.info("تسک پس‌زمینه متوقف شد.")
-            break
+            logger.info("=" * 40)
+            data = fetch_all_data()
+            if data.get("gold_18k"):
+                price = data["gold_18k"]["price"]
+                logger.info(f"💰 قیمت طلا: {price:,.0f}")
+                save_price_data(data)
+                df = get_historical_data(days=90)
+                tech = run_technical_analysis(df)
+                fund = compute_fundamental_score(data, df)
+                smc_r = compute_smc_score(df)
+                signal = signal_engine.combine(tech, fund, smc_r)
+
+                # ذخیره در کش
+                last_analysis["signal"] = signal
+                last_analysis["price"] = price
+                last_analysis["timestamp"] = datetime.now().isoformat()
+                last_analysis["data"] = data
+
+                logger.info(f"📊 جهت: {signal['direction']} | "
+                            f"اطمینان: {signal['confidence']}%")
+
+                if signal_engine.should_alert(signal):
+                    msg = signal_engine.format_message(signal, price)
+                    await send_telegram_message_async(msg)
+                    logger.info("✅ هشدار ارسال شد")
+            else:
+                logger.warning("⚠️ قیمت دریافت نشد")
         except Exception as e:
-            logger.error(f"خطا در تسک پس‌زمینه: {e}")
-            await asyncio.sleep(10)
+            logger.error(f"❌ خطا: {e}", exc_info=True)
+        await asyncio.sleep(FETCH_INTERVAL_MINUTES * 60)
 
-# --- ۶. رویدادهای Startup و Shutdown (مدیریت وب‌هوک) ---
-async def on_startup(bot: Bot):
-    if WEBHOOK_URL:
-        await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True)
-        logger.info(f"✅ وب‌هوک با موفقیت روی آدرس {WEBHOOK_URL} تنظیم شد.")
-    else:
-        logger.warning("⚠️ هشدار: RENDER_EXTERNAL_URL تنظیم نشده است. وب‌هوک تنظیم نشد.")
 
-async def on_shutdown(bot: Bot):
-    logger.info("🛑 در حال خاموش کردن ربات...")
-    await bot.delete_webhook()
-    await bot.session.close()
-    logger.info("✅ ربات با موفقیت خاموش شد.")
+# ══════════════════════════════════════════════
+# وب‌سرور (برای Render)
+# ══════════════════════════════════════════════
+async def health(request):
+    return web.Response(text="Bot is running")
 
-# --- ۷. تابع اصلی اجرای برنامه ---
+
+async def webhook_handler(request):
+    try:
+        data = await request.json()
+        update = Update.de_json(data, request.app["telegram_app"].bot)
+        await request.app["telegram_app"].process_update(update)
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+    return web.Response(text="OK")
+
+
 async def main():
-    # ثبت رویدادهای شروع و پایان
-    dp.startup.register(on_startup)
-    dp.shutdown.register(on_shutdown)
+    init_db()
 
-    # ایجاد اپلیکیشن وب aiohttp
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+    # ثبت همه دستورات
+    application.add_handler(CommandHandler("start", start_cmd))
+    application.add_handler(CommandHandler("help", help_cmd))
+    application.add_handler(CommandHandler("price", price_cmd))
+    application.add_handler(CommandHandler("analyze", analyze_cmd))
+    application.add_handler(CommandHandler("signal", signal_cmd))
+    application.add_handler(CommandHandler("status", status_cmd))
+
+    await application.initialize()
+    await application.start()
+
+    webhook_path = f"/{TELEGRAM_BOT_TOKEN}"
+
+    if RENDER_URL:
+        webhook_url = f"{RENDER_URL}{webhook_path}"
+        await application.bot.set_webhook(url=webhook_url)
+        logger.info(f"🔗 Webhook تنظیم شد: {webhook_url}")
+
     app = web.Application()
+    app["telegram_app"] = application
+    app.router.add_get("/", health)
+    app.router.add_post(webhook_path, webhook_handler)
 
-    # تنظیم هندلر وب‌هوک (دریافت پیام‌های تلگرام)
-    webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
-    webhook_requests_handler.register(app, path=WEBHOOK_PATH)
-
-    # اتصال ربات به اپلیکیشن وب
-    setup_application(app, dp, bot=bot)
-
-    # یک مسیر ساده برای Health Check (بررسی سلامت سرویس توسط Render)
-    async def health_check(request):
-        return web.Response(text="Bot is running!")
-    app.router.add_get("/", health_check)
-
-    # راه‌اندازی تسک پس‌زمینه
-    asyncio.create_task(analysis_loop())
-
-    # راه‌اندازی وب‌سرور روی پورت مناسب
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-    
-    logger.info(f"🚀 وب‌سرور روی پورت {PORT} اجرا شد.")
-    if WEBHOOK_URL:
-        logger.info(f"🌐 آدرس وب‌هوک: {WEBHOOK_URL}")
+    logger.info(f"✅ وب‌سرور روی پورت {PORT}")
 
-    # نگه داشتن برنامه در حال اجرا (تا زمانی که متوقف شود)
+    asyncio.create_task(analysis_loop())
+
     await asyncio.Event().wait()
 
-# --- ۸. نقطه ورود برنامه ---
+
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("برنامه متوقف شد.")
+    asyncio.run(main())
