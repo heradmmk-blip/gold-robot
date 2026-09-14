@@ -21,9 +21,10 @@ ATR_PERIOD = 14
 SWING_LENGTH = 5
 
 WEIGHTS = {
-    "technical":    0.30,
-    "fundamental":  0.40,
-    "smc":          0.30,
+    "technical":    0.25,
+    "fundamental":  0.35,
+    "smc":          0.25,
+    "pattern":      0.15,
 }
 
 BULLISH_THRESHOLD = 0.65
