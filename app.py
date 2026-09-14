@@ -1,5 +1,3 @@
-from chart_engine import generate_price_chart
-from telegram_notifier import send_telegram_photo_async
 import os
 import asyncio
 import logging
@@ -14,7 +12,8 @@ from fundamental_engine import compute_fundamental_score
 from smc_engine import compute_smc_score
 from pattern_engine import run_pattern_analysis
 from signal_engine import SignalEngine
-from telegram_notifier import send_telegram_message_async
+from telegram_notifier import send_telegram_message_async, send_telegram_photo_async
+from chart_engine import generate_price_chart
 
 logging.basicConfig(
     level=logging.INFO,
@@ -99,13 +98,13 @@ def check_sharp_movement(current_price):
 
         return (
             f"{emoji} **هشدار نوسان شدید!**\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
             f"📊 حرکت {direction}: **{change_pct:+.2f}%**\n"
             f"💰 قیمت فعلی: **{current_price:,.0f}** تومان\n"
             f"📉 قیمت {SHARP_MOVE_WINDOW_MIN} دقیقه پیش: **{oldest_price:,.0f}**\n"
             f"🕐 {now.strftime('%H:%M:%S')}\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"⚠️ _نوسان غیرعادی تشخیص داده شد._"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "⚠️ _نوسان غیرعادی تشخیص داده شد._"
         )
     return None
 
@@ -185,7 +184,8 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📊 **قابلیت‌های جدید:**\n"
         "• گزارش روزانه خودکار (ساعت ۹ صبح)\n"
         "• هشدار نوسان شدید (>۱٪ در ۱۵ دقیقه)\n"
-        "• الگوهای کندلی + سطوح حمایت/مقاومت\n\n"
+        "• الگوهای کندلی + سطوح حمایت/مقاومت\n"
+        "• نمودار گرافیکی\n\n"
         "📌 برای دیدن راهنما، دستور /help رو بزن."
     )
     await update.message.reply_text(text, parse_mode="Markdown")
@@ -326,6 +326,33 @@ async def report_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(report, parse_mode="Markdown")
 
 
+async def chart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("📊 در حال ساخت نمودار...")
+
+    try:
+        df = get_historical_data(days=3)
+
+        if df.empty or len(df) < 2:
+            await update.message.reply_text(
+                "📭 هنوز داده کافی برای رسم نمودار نداریم.\n"
+                "چند ساعت دیگه دوباره امتحان کن."
+            )
+            return
+
+        chart_buffer = generate_price_chart(df, "Gold 18K - Last 3 Days")
+
+        if chart_buffer is None:
+            await update.message.reply_text("❌ ساخت نمودار ناموفق بود.")
+            return
+
+        caption = f"📊 نمودار طلای ۱۸ عیار\n🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        await send_telegram_photo_async(chart_buffer, caption)
+
+    except Exception as e:
+        logger.error(f"chart_cmd error: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ خطا: {str(e)[:200]}")
+
+
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if last_analysis["timestamp"]:
         last_time = last_analysis["timestamp"][:19].replace("T", " ")
@@ -354,31 +381,7 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 
-async def chart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📊 در حال ساخت نمودار...")
 
-    try:
-        df = get_historical_data(days=3)
-
-        if df.empty or len(df) < 2:
-            await update.message.reply_text(
-                "📭 هنوز داده کافی برای رسم نمودار نداریم.\n"
-                "چند ساعت دیگه دوباره امتحان کن."
-            )
-            return
-
-        chart_buffer = generate_price_chart(df, "Gold 18K - Last 3 Days")
-
-        if chart_buffer is None:
-            await update.message.reply_text("❌ ساخت نمودار ناموفق بود.")
-            return
-
-        caption = f"📊 نمودار طلای ۱۸ عیار\n🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-        await send_telegram_photo_async(chart_buffer, caption)
-
-    except Exception as e:
-        logger.error(f"chart_cmd error: {e}", exc_info=True)
-        await update.message.reply_text(f"❌ خطا: {str(e)[:200]}")
 async def analysis_loop():
     logger.info("🔄 شروع حلقه تحلیل...")
     await asyncio.sleep(30)
@@ -450,7 +453,7 @@ async def webhook_handler(request):
     return web.Response(text="OK")
 
 
- async def main():
+async def main():
     init_db()
 
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
